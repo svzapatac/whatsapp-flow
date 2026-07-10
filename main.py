@@ -20,13 +20,11 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 def decrypt_request(body: dict, private_key_pem: str):
     """Desencripta la petición de WhatsApp Flow."""
 
-    # 1. Cargar clave privada RSA
     private_key = serialization.load_pem_private_key(
         private_key_pem.encode(),
         password=None
     )
 
-    # 2. Desencriptar la clave AES con RSA-OAEP
     encrypted_aes_key = base64.b64decode(body["encrypted_aes_key"])
     aes_key = private_key.decrypt(
         encrypted_aes_key,
@@ -37,11 +35,9 @@ def decrypt_request(body: dict, private_key_pem: str):
         )
     )
 
-    # 3. Obtener IV y datos encriptados
     iv = base64.b64decode(body["initial_vector"])
     encrypted_flow_data = base64.b64decode(body["encrypted_flow_data"])
 
-    # 4. Desencriptar con AES-GCM
     aesgcm = AESGCM(aes_key)
     decrypted_data = aesgcm.decrypt(iv, encrypted_flow_data, None)
 
@@ -52,7 +48,6 @@ def decrypt_request(body: dict, private_key_pem: str):
 def encrypt_response(response_obj: dict, aes_key: bytes, iv: bytes):
     """Encripta la respuesta para WhatsApp Flow."""
 
-    # Invertir el IV (XOR con 0xFF en cada byte) — requerido por Meta
     flipped_iv = bytes([b ^ 0xff for b in iv])
 
     aesgcm = AESGCM(aes_key)
@@ -66,11 +61,6 @@ def encrypt_response(response_obj: dict, aes_key: bytes, iv: bytes):
 
 
 def esta_disponible(valor_texto, flag_disponible):
-    """
-    Una entrada se considera disponible solo si:
-    - el campo de texto no está vacío/null, Y
-    - el flag manual de disponibilidad (si existe) no es False
-    """
     texto_valido = bool(valor_texto) and str(valor_texto).strip() != ""
     flag_valido = flag_disponible if flag_disponible is not None else True
     return texto_valido and flag_valido
@@ -112,11 +102,9 @@ async def whatsapp_flow_endpoint(request: Request):
     try:
         body = await request.json()
 
-        # Si no hay datos encriptados, es un health check simple
         if "encrypted_flow_data" not in body:
             return {"status": "active"}
 
-        # Desencriptar
         decrypted_body, aes_key, iv = decrypt_request(body, PRIVATE_KEY_PEM)
         print(f"REQUEST: {json.dumps(decrypted_body)}")
 
@@ -135,36 +123,34 @@ async def whatsapp_flow_endpoint(request: Request):
         if action == "data_exchange" and decrypted_body.get("data", {}).get("error"):
             print(f"CLIENT ERROR NOTIFICATION: {decrypted_body}")
 
-        # ─── OBTENER MENÚ Y RESPONDER ───
-        # Esto maneja tanto INIT como data_exchange
+        # ─── OBTENER MENÚ ───
         menu = await obtener_entradas_de_hoy()
 
         if not menu:
-            response_payload = {
-                "version": version,
-                "screen": "ENTRADAS",
-                "data": {
-                    "entrada1_label": "😕 No hay entradas disponibles hoy",
-                    "entrada2_label": "Vuelve a intentarlo mas tarde",
-                    "entrada3_label": "-",
-                    "entrada1_disponible": False,
-                    "entrada2_disponible": False,
-                    "entrada3_disponible": False,
-                }
+            data = {
+                "entrada1_label": "😕 No hay entradas disponibles hoy",
+                "entrada2_label": "Vuelve a intentarlo mas tarde",
+                "entrada3_label": "-",
+                "entrada1_disponible": False,
+                "entrada2_disponible": False,
+                "entrada3_disponible": False,
             }
         else:
-            response_payload = {
-                "version": version,
-                "screen": "ENTRADAS",
-                "data": {
-                    "entrada1_label": f"🥣 {menu['entrada1']}" if menu.get('entrada1') else "-",
-                    "entrada2_label": f"🍮 {menu['entrada2']}" if menu.get('entrada2') else "-",
-                    "entrada3_label": f"🍎 {menu['entrada3']}" if menu.get('entrada3') else "-",
-                    "entrada1_disponible": esta_disponible(menu.get('entrada1'), menu.get('entrada1_disponible')),
-                    "entrada2_disponible": esta_disponible(menu.get('entrada2'), menu.get('entrada2_disponible')),
-                    "entrada3_disponible": esta_disponible(menu.get('entrada3'), menu.get('entrada3_disponible')),
-                }
+            data = {
+                "entrada1_label": f"🥣 {menu['entrada1']}" if menu.get('entrada1') else "-",
+                "entrada2_label": f"🍮 {menu['entrada2']}" if menu.get('entrada2') else "-",
+                "entrada3_label": f"🍎 {menu['entrada3']}" if menu.get('entrada3') else "-",
+                "entrada1_disponible": esta_disponible(menu.get('entrada1'), menu.get('entrada1_disponible')),
+                "entrada2_disponible": esta_disponible(menu.get('entrada2'), menu.get('entrada2_disponible')),
+                "entrada3_disponible": esta_disponible(menu.get('entrada3'), menu.get('entrada3_disponible')),
             }
+
+        # ─── RESPUESTA PARA INIT Y DATA_EXCHANGE (igual) ───
+        response_payload = {
+            "version": version,
+            "screen": "ENTRADAS",
+            "data": data
+        }
 
         print(f"RESPONSE: {json.dumps(response_payload)}")
 
@@ -174,7 +160,6 @@ async def whatsapp_flow_endpoint(request: Request):
     except Exception as e:
         print(f"ERROR: {e}")
         print(traceback.format_exc())
-        # Meta necesita status 200 siempre, el error va en el body
         return Response(
             content=json.dumps({"error": str(e)}),
             status_code=200,
