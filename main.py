@@ -112,7 +112,7 @@ async def whatsapp_flow_endpoint(request: Request):
     try:
         body = await request.json()
 
-        # Si no hay datos encriptados, es un health check simple (GET-like ping externo)
+        # Si no hay datos encriptados, es un health check simple
         if "encrypted_flow_data" not in body:
             return {"status": "active"}
 
@@ -121,8 +121,6 @@ async def whatsapp_flow_endpoint(request: Request):
         print(f"REQUEST: {json.dumps(decrypted_body)}")
 
         action = decrypted_body.get("action")
-        # Meta manda su propia versión en cada request; SIEMPRE debemos
-        # reflejarla en la respuesta, no hardcodear "3.0".
         version = decrypted_body.get("version", "3.0")
 
         # Ping de salud que hace Meta periódicamente
@@ -133,11 +131,12 @@ async def whatsapp_flow_endpoint(request: Request):
             )
             return Response(content=encrypted, media_type="text/plain")
 
-        # Notificación de error del cliente (si tu respuesta anterior fue inválida)
+        # Notificación de error del cliente
         if action == "data_exchange" and decrypted_body.get("data", {}).get("error"):
             print(f"CLIENT ERROR NOTIFICATION: {decrypted_body}")
 
-        # Obtener menú
+        # ─── OBTENER MENÚ Y RESPONDER ───
+        # Esto maneja tanto INIT como data_exchange
         menu = await obtener_entradas_de_hoy()
 
         if not menu:
@@ -175,8 +174,9 @@ async def whatsapp_flow_endpoint(request: Request):
     except Exception as e:
         print(f"ERROR: {e}")
         print(traceback.format_exc())
+        # Meta necesita status 200 siempre, el error va en el body
         return Response(
             content=json.dumps({"error": str(e)}),
-            status_code=421,
+            status_code=200,
             media_type="application/json"
         )
