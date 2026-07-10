@@ -10,23 +10,16 @@ import httpx
 
 app = FastAPI()
 
-# ─── CONFIGURACIÓN ───
-# Estas variables vienen de Railway (las pondremos después)
 PRIVATE_KEY_PEM = os.environ.get("FLOW_PRIVATE_KEY", "")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
 
 def decrypt_request(body: dict, private_key_pem: str):
-    """Desencripta la petición de WhatsApp Flow."""
-    
-    # 1. Cargar clave privada RSA
     private_key = serialization.load_pem_private_key(
         private_key_pem.encode(),
         password=None
     )
-    
-    # 2. Desencriptar la clave AES con RSA-OAEP
     encrypted_aes_key = base64.b64decode(body["encrypted_aes_key"])
     aes_key = private_key.decrypt(
         encrypted_aes_key,
@@ -36,40 +29,27 @@ def decrypt_request(body: dict, private_key_pem: str):
             label=None
         )
     )
-    
-    # 3. Obtener IV y datos encriptados
     iv = base64.b64decode(body["initial_vector"])
     encrypted_flow_data = base64.b64decode(body["encrypted_flow_data"])
-    
-    # 4. Desencriptar con AES-GCM
     aesgcm = AESGCM(aes_key)
     decrypted_data = aesgcm.decrypt(iv, encrypted_flow_data, None)
-    
     decrypted_body = json.loads(decrypted_data.decode('utf-8'))
     return decrypted_body, aes_key, iv
 
 
 def encrypt_response(response_obj: dict, aes_key: bytes, iv: bytes):
-    """Encripta la respuesta para WhatsApp Flow."""
-    
-    # Invertir el IV (XOR con 0xFF en cada byte)
     flipped_iv = bytes([b ^ 0xff for b in iv])
-    
-    # Encriptar
     aesgcm = AESGCM(aes_key)
     encrypted = aesgcm.encrypt(
         flipped_iv,
         json.dumps(response_obj).encode('utf-8'),
         None
     )
-    
     return base64.b64encode(encrypted).decode('utf-8')
 
 
 async def obtener_entradas_de_hoy():
-    """Consulta el menú de hoy en Supabase."""
     hoy = datetime.now().strftime("%Y-%m-%d")
-    
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{SUPABASE_URL}/rest/v1/menu_diario",
@@ -83,15 +63,14 @@ async def obtener_entradas_de_hoy():
                 "Authorization": f"Bearer {SUPABASE_KEY}"
             }
         )
-        
         if response.status_code != 200:
             return None
-        
         rows = response.json()
         return rows[0] if rows else None
 
 
 @app.get("/")
+@app.get("/health")
 async def health_check():
     return {"status": "active"}
 
@@ -101,25 +80,22 @@ async def whatsapp_flow_endpoint(request: Request):
     try:
         body = await request.json()
         
-        # Si no hay datos encriptados, es un health check
         if "encrypted_flow_data" not in body:
             return {"status": "active"}
         
-        # Desencriptar
         decrypted_body, aes_key, iv = decrypt_request(body, PRIVATE_KEY_PEM)
         print(f"REQUEST: {json.dumps(decrypted_body)}")
         
         action = decrypted_body.get("action")
+        flow_token = decrypted_body.get("flow_token", "")
         
-        # Ping
         if action == "ping":
             encrypted = encrypt_response(
-                {"data": {"status": "active"}},
+                {"data": {"status": "active"}, "flow_token": flow_token},
                 aes_key, iv
             )
             return Response(content=encrypted, media_type="text/plain")
         
-        # Obtener menú
         menu = await obtener_entradas_de_hoy()
         
         if not menu:
@@ -129,7 +105,8 @@ async def whatsapp_flow_endpoint(request: Request):
                     "entrada1_label": "😕 No hay entradas disponibles hoy",
                     "entrada2_label": "Vuelve a intentarlo mas tarde",
                     "entrada3_label": "-",
-                }
+                },
+                "flow_token": flow_token
             }
         else:
             response_payload = {
@@ -138,7 +115,8 @@ async def whatsapp_flow_endpoint(request: Request):
                     "entrada1_label": f"🥣 {menu['entrada1']}",
                     "entrada2_label": f"🍮 {menu['entrada2']}",
                     "entrada3_label": f"🍎 {menu['entrada3']}",
-                }
+                },
+                "flow_token": flow_token
             }
         
         print(f"RESPONSE: {json.dumps(response_payload)}")
@@ -148,8 +126,16 @@ async def whatsapp_flow_endpoint(request: Request):
         
     except Exception as e:
         print(f"ERROR: {e}")
+        import traceback
+        traceback.print_exc()
         return Response(
             content=json.dumps({"error": str(e)}),
             status_code=421,
             media_type="application/json"
         )
+
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
