@@ -65,6 +65,17 @@ def encrypt_response(response_obj: dict, aes_key: bytes, iv: bytes):
     return base64.b64encode(encrypted).decode('utf-8')
 
 
+def esta_disponible(valor_texto, flag_disponible):
+    """
+    Una entrada se considera disponible solo si:
+    - el campo de texto no está vacío/null, Y
+    - el flag manual de disponibilidad (si existe) no es False
+    """
+    texto_valido = bool(valor_texto) and str(valor_texto).strip() != ""
+    flag_valido = flag_disponible if flag_disponible is not None else True
+    return texto_valido and flag_valido
+
+
 async def obtener_entradas_de_hoy():
     """Consulta el menú de hoy en Supabase."""
     hoy = datetime.now().strftime("%Y-%m-%d")
@@ -75,7 +86,7 @@ async def obtener_entradas_de_hoy():
             params={
                 "fecha": f"eq.{hoy}",
                 "activo": "eq.true",
-                "select": "entrada1,entrada2,entrada3"
+                "select": "entrada1,entrada2,entrada3,entrada1_disponible,entrada2_disponible,entrada3_disponible"
             },
             headers={
                 "apikey": SUPABASE_KEY,
@@ -137,6 +148,9 @@ async def whatsapp_flow_endpoint(request: Request):
                     "entrada1_label": "😕 No hay entradas disponibles hoy",
                     "entrada2_label": "Vuelve a intentarlo mas tarde",
                     "entrada3_label": "-",
+                    "entrada1_disponible": False,
+                    "entrada2_disponible": False,
+                    "entrada3_disponible": False,
                 }
             }
         else:
@@ -144,9 +158,12 @@ async def whatsapp_flow_endpoint(request: Request):
                 "version": version,
                 "screen": "ENTRADAS",
                 "data": {
-                    "entrada1_label": f"🥣 {menu['entrada1']}",
-                    "entrada2_label": f"🍮 {menu['entrada2']}",
-                    "entrada3_label": f"🍎 {menu['entrada3']}",
+                    "entrada1_label": f"🥣 {menu['entrada1']}" if menu.get('entrada1') else "-",
+                    "entrada2_label": f"🍮 {menu['entrada2']}" if menu.get('entrada2') else "-",
+                    "entrada3_label": f"🍎 {menu['entrada3']}" if menu.get('entrada3') else "-",
+                    "entrada1_disponible": esta_disponible(menu.get('entrada1'), menu.get('entrada1_disponible')),
+                    "entrada2_disponible": esta_disponible(menu.get('entrada2'), menu.get('entrada2_disponible')),
+                    "entrada3_disponible": esta_disponible(menu.get('entrada3'), menu.get('entrada3_disponible')),
                 }
             }
 
